@@ -1,0 +1,91 @@
+version: "3.1"
+services:
+  grafana:
+    image: grafana/grafana:7.3.7
+    volumes:
+      - ./grafana/config.ini:/etc/grafana/config.ini
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - type: bind
+        source: ./grafana/var/grafana.db
+        target: /var/lib/grafana/grafana.db1
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+  prometheus:
+    image: prom/prometheus:v2.24.1
+    user: root
+    command: [ "--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--web.console.libraries=/usr/share/prometheus/console_libraries", "--web.console.templates=/usr/share/prometheus/consoles", "--web.route-prefix=/", "--web.external-url=https://monitor.domain.com/prometheus" ]
+    volumes:
+      - ./config/:/etc/prometheus/
+      - ./prometheus:/prometheus
+    depends_on:
+      - node-exporter
+      - cadvisor
+    networks:
+      monitoring:
+        aliases:
+          - prometheus
+  node-exporter:
+    image: prom/node-exporter:v1.0.1
+    volumes:
+      - /etc/hostname:/etc/nodename:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /mnt/docker-cluster:/mnt/docker-cluster:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/TZ:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      monitoring:
+        aliases:
+          - node-exporter
+  nginx:
+    image: nginx:1.15-alpine
+    restart: always
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    ports:
+      - "80:80"
+      - "443:443"
+    command: "/bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
+    depends_on:
+      - grafana
+    networks:
+      monitoring:
+        aliases:
+          - nginx
+  certbot:
+    image: certbot/certbot
+    restart: always
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    volumes:
+    - /:/rootfs:ro
+    - /var/run:/var/run:rw
+    - /sys:/sys:ro
+    - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      monitoring:
+        aliases:
+         - cadvisor
+    depends_on:
+    - redis
+  redis:
+    image: redis:latest
+    networks:
+      monitoring:
+        aliases:
+          - redis
+
+networks:
+  monitoring:
